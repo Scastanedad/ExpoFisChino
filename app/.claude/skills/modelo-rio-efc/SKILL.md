@@ -35,11 +35,13 @@ M1/M2 resuelta; la geometría se impone).
 
 ## Campo hidráulico
 
-Se recalcula entero en `setParams()`, una vez por cambio de parámetros, nunca por partícula.
+Se recalcula entero (`updateHydraulics()`) en `setParams()`, en `reset()` y al inicio de cada
+`step()` si el lecho cambió desde el paso anterior (400 celdas, barato), nunca por partícula.
 
 ```
 q = velocity · depth                        // caudal por unidad de ancho, constante en x
-h(x) = depth · (1 + (poolFactor − 1)·w(x))   // w = 0 fuera del remanso, 1 dentro
+h₀(x) = depth · (1 + (poolFactor − 1)·w(x))  // geometría base; w = 0 fuera del remanso, 1 dentro
+h(x) = max(h₀(x) − η(x), h_min)              // η = espesor del depósito (Exner), h_min = 0.1·depth
 U(x) = q / h(x)                              // continuidad
 u*(x) = U(x)·κ / max(ln(h/z₀) − 1, 0.5)      // ley de la pared
 τ(x) = ρ_w · u*(x)²
@@ -48,6 +50,28 @@ u*(x) = U(x)·κ / max(ln(h/z₀) − 1, 0.5)      // ley de la pared
 **El mecanismo central del proyecto está en estas cuatro líneas.** En el remanso `h` sube, por
 continuidad `U` baja, `u*` baja, y `τ ∝ u*²` baja *más* que proporcionalmente. El remanso es
 una trampa de sedimento por continuidad, no porque se le haya programado que atrape.
+
+## Lecho evolutivo (Exner) — desde sept. 2026
+
+Cada partícula es una parcela de volumen fijo. Depositarse suma `BED_DZ_PER_PARTICLE = 0.005 m`
+al espesor `η` de su bin (2 m); resuspenderse lo resta: `∂η/∂t = (D − E)·V/(Δx(1−λ))`, con el
+volumen de parcela y la porosidad absorbidos en esa constante. `η` se interpola linealmente
+entre centros de bin para obtener `h(x)` por celda (evita escalones de τ cada 2 m).
+
+Consecuencia: un depósito reduce `h`, sube `U` y `τ`, y deja de crecer cuando `τ ≈ τ_ce`. A
+partir de ahí el frente de la barra **prograda** aguas abajo (delta). Altura de equilibrio
+analítica: la `h_eq` que cumple `q = h_eq·(u*c/κ)(ln(h_eq/z₀) − 1)` con `u*c = √(τ_ce/ρ)`; p.ej.
+grava con `q = 6 m²/s` → `h_eq ≈ 5.7 m` (verificado en simulación).
+
+- **Ángulo de reposo** (`REPOSE_TAN = tan 32°`): si la cota del lecho (`η − h₀`) de un bin supera
+  a la de un vecino en más de `Δx·tanφ`, sus parcelas avalanchan a ese vecino (cara de avalancha
+  del delta). No se avalancha hacia la zona de entrada.
+- **Lámina mínima** (`MIN_WATER_FRACTION = 0.1`): un bin con `η ≥ h₀ − 0.1·depth` no acepta más
+  depósito; el sedimento pasa por encima como carga de fondo.
+- `BED_DZ_PER_PARTICLE` es un **factor de aceleración morfológica** (morfac, Roelvink 2006):
+  la concentración implícita es muy superior a la de un río real para que el remanso se colmate
+  en minutos de simulación y no en años. Es pedagógico; lo físico es el mecanismo, no la escala
+  de tiempo.
 
 `max(..., 0.5)` es un guardarraíl numérico: evita división por cero o `u*` absurdo cuando
 `h → z₀` (profundidades menores a ~3 mm). No tiene significado físico; solo impide que la
@@ -197,6 +221,9 @@ siempre en: (a) `deposited[c]--` sin el `depositBins--` correspondiente en la re
 | `lift` | 0.03·h·√(ex−1) | Altura típica tras levantarse |
 | `Z0` | 0.001 m | **La perilla más influyente**: desplaza *todas* las velocidades críticas |
 | `cohesionLevel()` | interpolación log-lineal | Forma continua de la curva de Hjulström dibujada |
+| `BED_DZ_PER_PARTICLE` | 0.005 m | Velocidad de colmatación (aceleración morfológica) |
+| `REPOSE_TAN` | tan 32° | Pendiente máxima de la cara de una barra (literatura: 30–35° sumergido) |
+| `MIN_WATER_FRACTION` | 0.1 | Lámina de agua mínima sobre un depósito colmatado |
 
 ## Desviaciones conocidas respecto a la literatura
 
@@ -210,40 +237,12 @@ siempre en: (a) `deposited[c]--` sin el `depositBins--` correspondiente en la re
 2. **Sin floculación.** Las arcillas se tratan como granos individuales de 2 µm. En un río real
    con sales o materia orgánica flocularían y sedimentarían mucho más. Es la respuesta honesta
    a "¿por qué la arcilla nunca se deposita?": *en este modelo* no flocula.
-3. **Sin lecho evolutivo.** Depositar no cambia `h` ni `z₀`; no hay acorazamiento, ni formas de
-   fondo, ni realimentación morfológica. El campo hidráulico es estático dado `SimParams`.
-   **Manifestación extrema, confirmada con datos (sept. 2026):** a `velocity=2, depth=3,
-   poolFactor=3.8` (combinación fuera del rango instrumentado hasta entonces: `depth` sólo se
-   había probado a fondo hasta 1, `poolFactor` hasta 3), `h` en el remanso sube a
-   `depth·poolFactor=11.4 m` y, por continuidad, `τ_remanso ≈ 0.67 Pa` — sólo 21 % del
-   `τ_ce` de la grava (3.25 Pa). Como la resuspensión sólo tiene probabilidad `>0` cuando
-   `τ > τ_ce` (`ex = τ/τ_ce > 1`), a estos parámetros esa condición **nunca se cumple**: la
-   grava que se deposita ahí queda atrapada de forma permanente mientras los parámetros no
-   cambien. Con aporte continuo (`feedRate` constante) el depósito de grava crece de forma
-   monótona y sin límite natural, acotado solo por la `capacity` global del motor (se
-   confirmó con simulación de 900 s: depósito de grava sube de forma sostenida, sin plateau,
-   sin romper el invariante de masa; ver `sim.test.ts`, describe "caso límite: remanso
-   profundo sin resuspensión posible"). El depósito se concentra en 1-2 bins justo donde `τ`
-   cruza `τ_ce` (el borde de entrada al remanso, ~bin 21-25 con estos parámetros), no
-   disperso por todo el remanso: es coherente con `bedload` (grava tiene `P > 2.5`, viaja
-   pegada al lecho y contacta el lecho muy seguido, así que se agota apenas entra a la zona
-   de baja competencia) y es cualitativamente el mismo fenómeno que un **delta en la cabecera
-   de un embalse/lago** (la carga de fondo se deposita donde el flujo pierde competencia, no
-   repartida uniformemente en la zona de baja energía). Esto es correcto y hasta interesante
-   *cualitativamente*, pero la **magnitud es irreal** porque en un río real el delta
-   progradaría, subiría la cota local del lecho, reduciría la profundidad local y con eso
-   recuperaría algo de competencia — exactamente la realimentación que este modelo no tiene.
-   **Decisión (backend, sept. 2026): no se agregó un tope de capacidad de bin ni ninguna
-   realimentación lecho→hidráulica.** Motivos: (i) ya es una limitación declarada y aceptada
-   del modelo, no un bug — cambiar el motor para "tapar" un caso límite fuera del rango antes
-   probado contradice el criterio de esta skill; (ii) una realimentación real requeriría
-   definir cómo la deposición sube `h`/`z₀` y recalcular `τ` en consecuencia, un modelo
-   morfodinámico completo que está fuera del alcance actual y podría alterar resultados ya
-   validados en otros experimentos (p.ej. "remanso", "clasificación granulométrica"); (iii) un
-   tope de bin puramente numérico (redistribuir partículas al llenarse un bin) sería un parche
-   sin respaldo físico, no una "decisión física real". La responsabilidad de comunicar este
-   caso (visualmente, con un aviso de "fuera del rango validado", o limitando el rango
-   accesible de los sliders) queda del lado de UI/frontend, no del motor.
+3. **Lecho evolutivo simplificado.** Desde sept. 2026 el depósito sí realimenta la hidráulica
+   (Exner + ángulo de reposo, ver §"Lecho evolutivo"), lo que corrigió la acumulación
+   "infinita" de grava en un solo bin (remanso profundo `velocity=2, depth=3, poolFactor=3.8`, y
+   el pico en x=10 m a velocidad baja). Sigue sin haber acorazamiento, formas de fondo ni cambio
+   de `z₀`; la escala de tiempo morfológica está acelerada (ver morfac arriba); cada parcela
+   depositada puede resuspenderse aunque esté enterrada (no hay capas).
 4. **Sin curva de remanso resuelta.** La geometría del remanso se impone; no sale de resolver
    flujo gradualmente variado.
 5. **2D vertical (x, z).** No hay ancho ni flujo secundario ni meandros.
@@ -258,7 +257,7 @@ Estas cinco son **limitaciones legítimas y declarables**, no bugs. Ante una pre
 | `velocity` | 0.1 – 2.0 m/s | Bajo 0.1 no hay transporte visible; sobre 2.0 todo sale y la lección se pierde |
 | `depth` | 0.3 – 3 m | Bajo ~0.3 m la ley de la pared con `z₀=1 mm` pierde validez (pocas rugosidades) |
 | `poolFactor` | 1.0 – 4.0 | 1 = sin remanso; sobre ~4 el remanso es un lago y `U` cae al ruido |
-| `poolFactor` × `depth` altos juntos (p.ej. `poolFactor≥3` con `depth≥2`, `h_remanso≥6 m`) | usar con cautela | `τ_remanso` puede caer muy por debajo de `τ_ce` de la grava (sin vía de resuspensión posible): ver limitación conocida #3, "manifestación extrema" |
+| `poolFactor` × `depth` altos juntos (p.ej. `poolFactor≥3` con `depth≥2`, `h_remanso≥6 m`) | válido, tarda | El remanso se colmata hasta `h_eq` de la grava; con pocos miles de parcelas puede aparecer `saturated` antes de llenarse |
 | `feedRate` | 5 – 200 part/s | Sobre `capacity/tiempo_de_tránsito` aparece `saturated` |
 | `mix` | suma > 0 | Si suma 0 no se inyecta nada (comportamiento definido, no error) |
 
@@ -277,14 +276,10 @@ Estas cinco son **limitaciones legítimas y declarables**, no bugs. Ante una pre
 - *¿Por qué al subir la velocidad de golpe sale más de lo que entra?* → Resuspensión: el tramo
   libera el depósito acumulado antes. Se ve como `transportCapacity > 1` en la ventana móvil.
   Es física real (histéresis), no un bug.
-- *¿Por qué la grava se acumula "de forma infinita" en un remanso muy profundo (p.ej.
-  `depth=3, poolFactor=3.8`)?* → `τ_remanso` cae tan por debajo de `τ_ce` de la grava que
-  `ex = τ/τ_ce` nunca supera 1: la resuspensión (que sólo ocurre si `ex>1`) queda
-  matemáticamente imposible mientras esos parámetros no cambien. Sin realimentación
-  lecho→hidráulica (limitación conocida #3), nada baja ese depósito: crece mientras haya
-  aporte, acotado solo por la `capacity` del motor. Es el análogo cualitativo de un delta en
-  la cabecera de un embalse, pero sin el mecanismo real que lo limitaría (progradación que
-  sube la cota del lecho y recupera competencia).
+- *¿Por qué la barra de grava deja de crecer hacia arriba y empieza a avanzar?* → El depósito
+  sube el lecho, la sección se achica, por continuidad el agua se acelera y `τ` sobre la barra
+  vuelve a `τ_ce`: ahí ya no se deposita más encima, y la grava que llega se deposita en el
+  frente, que avanza aguas abajo. Es cómo crece un delta en la cabecera de un embalse.
 
 ## Skills relacionadas
 

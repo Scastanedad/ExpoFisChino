@@ -1,14 +1,19 @@
 ---
 tipo: sync
-fecha: 2026-09-20
+fecha: 2026-09-28
 ---
 
 # Sesión Actual
 
-**Fecha:** 2026-09-20 (cierre de la ronda de revamp visual + comportamiento, más un fix post-cierre)
+**Fecha:** 2026-09-28 (lecho evolutivo — corrección de la acumulación de grava en puntos extremos)
 **Proyecto:** [[../00-Proyecto/README|ExpoFisChino]]
 
-## Qué pasó en este bloque (fix post-cierre: acumulación de grava en remanso profundo)
+## Qué pasó en este bloque (2026-09-28, lecho evolutivo)
+El usuario reportó de nuevo acumulación de grava en puntos extremos y pidió corregirla y verificar la física. Se implementó la realimentación lecho→flujo (Exner, ángulo de reposo 32°, lámina mínima 0.1·depth) en el motor; el depósito ahora crece hasta τ≈τce y luego prograda como delta, en vez de apilarse sin límite en un bin (x≈44 m en remanso profundo, x=10 m a baja velocidad). Dibujo con espesor físico. `npm test` 48/48, build limpio, Playwright sin errores de consola. Commit + push en `claude/zen-dirac-sbgw2v` (sin PR). Detalle en [[../00-Proyecto/decisiones]].
+
+**Siguiente:** el usuario prueba la rama; si el remanso se colmata demasiado rápido para la demo, bajar `BED_DZ_PER_PARTICLE` (ojo: más partículas para llenar → puede aparecer `saturated` en casos extremos).
+
+## Bloque anterior (fix post-cierre: acumulación de grava en remanso profundo)
 Tras cerrar el revamp (ver sección siguiente), el usuario probó la app y reportó: "la grava se acumula de manera infinita y no natural en ciertas condiciones, como por ejemplo en el experimento de crecida a sequía con velocidad de agua a 2 m/s, remanso 3.8, profundidad 3 y demás."
 
 - **Diagnóstico (`backend-expert`):** siguiendo el protocolo de la skill `calibracion-numerica-lagrangiana`, se confirmó que es física real, no un bug de contabilidad (invariante de masa exacto en todo momento). Con `depth=3, poolFactor=3.8` el remanso queda con `τ≈0.67 Pa`, solo 21% del `τ_ce` de la grava — la resuspensión nunca ocurre a estos parámetros, así que la grava depositada queda atrapada de forma permanente y crece sin plateau. Es la manifestación extrema de la limitación #3 ya declarada de `modelo-rio-efc` (sin lecho evolutivo / sin realimentación morfológica). Se decidió explícitamente **no tocar el motor** (parchar un caso límite fuera del rango antes probado contradice el criterio de no ajustar un mecanismo para tapar un resultado físicamente correcto; una realimentación lecho→hidráulica real es un modelo morfodinámico completo, fuera de alcance). Se agregó un test de regresión de comportamiento documentado y una entrada nueva en la tabla de rangos de `modelo-rio-efc` (`poolFactor≥3` con `depth≥2` requiere cautela).

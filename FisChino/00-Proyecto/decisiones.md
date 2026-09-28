@@ -1,11 +1,23 @@
 ---
 tipo: decisiones
-última-actualización: 2026-09-20
+última-actualización: 2026-09-28
 ---
 Q
 # Decisiones Arquitectónicas — ExpoFisChino
 
 Una entrada por decisión, más reciente arriba.
+
+## Lecho evolutivo (Exner + ángulo de reposo): fin de la acumulación "infinita" de grava en puntos extremos
+**Fecha:** 2026-09-28  **Impacto:** Alto  **Estado:** implementado, `npm test` 48/48, `npm run build` limpio, verificado con Playwright
+
+El usuario volvió a reportar que la grava se acumula en puntos extremos y pidió corregirlo y revisar la física. Se revierte la decisión del 2026-09-20 de "no tocar el motor": el clamp visual tapaba el síntoma, pero la causa era física (faltaba la realimentación lecho→flujo). Reproducción: con `U=2, h=3, remanso=3.8`, 96 % de la grava en un solo bin de 2 m (x≈44 m); con `U=0.05` o `U=0.3, h=0.5`, miles de partículas en el bin justo después de la zona de entrada (x=10 m).
+
+- `src/sim/engine.ts`: cada partícula es una parcela; al depositarse sube el lecho de su bin `BED_DZ_PER_PARTICLE=0.005 m` (Exner). La hidráulica usa `h = h₀ − η` (con `h₀` la geometría base) y se recalcula cuando el lecho cambia; por continuidad, sobre la barra suben U y τ, y el depósito se frena solo cuando τ≈τce. Después la barra prograda (delta). Ángulo de reposo 32° (avalancha entre bins vecinos) y lámina mínima `0.1·depth` (bin colmatado → el sedimento pasa por encima).
+- Validación: altura de equilibrio de la barra de grava en el remanso profundo ≈ 5.75 m, igual al valor analítico de `q = h·(u*c/κ)(ln(h/z₀)−1)`; aguas arriba τ/τce converge a 1.01.
+- `src/render/drawRiver.ts`: el depósito se dibuja con su espesor físico (misma escala que el agua) sobre el lecho base `h0At`; se elimina el clamp proporcional (ya no hace falta), se mantiene la marca "colmatado".
+- Tests: el describe "caso límite" (que documentaba crecimiento sin límite) se reemplazó por 5 tests de equilibrio, reposo, lámina mínima, coherencia lecho/conteos y reset.
+- Revisión de física de `physics.ts` (D*, ws, θcr, ley de la pared, Rouse) y del paseo aleatorio (esquema de Visser): sin errores. Simplificación conocida, no cambiada: la grava en carga de fondo avanza a la velocidad del fluido a `z_b`, no con el retraso de partícula de Fernández Luque & van Beek.
+- Skill `modelo-rio-efc` actualizada (sección "Lecho evolutivo", limitación #3 reescrita).
 
 ## Corrección post-cierre: acumulación de grava "infinita" en remanso profundo — diagnóstico, no bug, documentación de limitación conocida
 **Fecha:** 2026-09-20  **Impacto:** Medio  **Estado:** resuelto por ambos lados — `backend-expert` diagnosticó y documentó (dato real sin cambios de motor) y `frontend-expert` acotó la representación visual con un clamp proporcional; test de regresión agregado; **sin cambios de motor** (decisión explícita de no tocar `src/sim/engine.ts`); `npm test` 45/45 verde, `npm run build` limpio
