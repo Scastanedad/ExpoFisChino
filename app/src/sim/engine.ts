@@ -29,6 +29,35 @@ export const POOL_END = 0.7;
  */
 export const ENTRY_BUFFER = 10;
 
+/**
+ * Realimentación lecho → flujo (morfodinámica, ecuación de Exner discretizada por bins).
+ *
+ * Cada partícula lagrangiana representa una "parcela" de sedimento de volumen fijo. Al
+ * depositarse eleva el lecho de su bin (2 m de ancho) en `BED_DZ_PER_PARTICLE` metros, y al
+ * resuspenderse lo baja lo mismo: dz_b/dt = (D − E)·V/(Δx·(1−λ)) (Exner, 1925), con el volumen de
+ * la parcela y la porosidad λ absorbidos en esta única constante. El lecho elevado reduce la
+ * profundidad local del agua; por continuidad (q = U·h constante) U y u* suben, τ sube, y el
+ * depósito se detiene por sí solo cuando τ alcanza τce. Eso sustituye el crecimiento "infinito"
+ * en un solo bin (sin realimentación) por el comportamiento natural: la barra crece hasta su
+ * altura de equilibrio y luego su frente avanza aguas abajo (progradación de un delta).
+ * Valor pedagógico: 1 cm por parcela en un bin de 2 m hace que un remanso se colmate en minutos
+ * de simulación (visible en la expo), no en años.
+ */
+export const BED_DZ_PER_PARTICLE = 0.005;
+/**
+ * Pendiente máxima estable del lecho (tangente del ángulo de reposo). Para arena/grava
+ * sumergida el ángulo de reposo es ~30–35° (p.ej. van Rijn 1993); se usa 32° → tan ≈ 0.62.
+ * Si la diferencia de cota entre dos bins vecinos supera Δx·tanφ, las parcelas del bin alto
+ * "avalanchan" al vecino más bajo (cara de avalancha de una barra/delta).
+ */
+export const REPOSE_TAN = Math.tan((32 * Math.PI) / 180);
+/**
+ * Lámina de agua mínima sobre el depósito, como fracción de la profundidad aguas arriba.
+ * Guardarraíl: un bin cuyo lecho llegó a este tope ya no acepta más depósito (sin espacio de
+ * acomodación) y el sedimento sigue de largo como carga de fondo por encima de él.
+ */
+export const MIN_WATER_FRACTION = 0.1;
+
 export interface SimParams {
   /** velocidad media aguas arriba (m/s) */
   velocity: number;
@@ -128,6 +157,7 @@ export const SUSPENDED = 1;
 export const DEPOSITED = 2;
 
 const E0 = 0.2; // tasa base de resuspensión (1/s) por exceso de esfuerzo
+const BIN_WIDTH = RIVER_LENGTH / N_BINS; // ancho de bin (m)
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -150,6 +180,9 @@ export class SedimentEngine {
   readonly state: Uint8Array;
 
   // Campo hidráulico por celda
+  /** profundidad geométrica base (sin depósito), impuesta por depth/poolFactor */
+  readonly h0Arr = new Float32Array(NX);
+  /** profundidad efectiva del agua = h0 − espesor del depósito (lo que ve la hidráulica) */
   readonly hArr = new Float32Array(NX);
   readonly uMeanArr = new Float32Array(NX);
   readonly uStarArr = new Float32Array(NX);
@@ -164,6 +197,13 @@ export class SedimentEngine {
   private exited: number[];
   private deposited: number[];
   private depositBins: Int32Array;
+  /** espesor del depósito por bin (m), = conteo total del bin · BED_DZ_PER_PARTICLE */
+  private bedBin = new Float64Array(N_BINS);
+  /** profundidad base en el centro de cada bin (m) */
+  private h0Bin = new Float64Array(N_BINS);
+  private hMin = 0.1;
+  private bedDirty = false;
+  private readonly firstDepositBin = Math.ceil((ENTRY_BUFFER / RIVER_LENGTH) * N_BINS);
   private saturated = false;
   private time = 0;
   private injectAcc = 0;
@@ -221,8 +261,7 @@ export class SedimentEngine {
     const prev = this.params;
     const shouldReset = !!p.resetOnChange && keyParamsChanged(prev, p);
     this.params = { ...p, mix: [...p.mix] };
-    const { velocity, depth, poolFactor } = this.params;
-    const q = velocity * depth; // caudal por unidad de ancho (continuidad)
+    const { depth, poolFactor } = this.params;
     const ramp = 0.08; // fracción de la longitud usada para suavizar el remanso (8 m a cada lado del tramo 50-70 m)
     for (let i = 0; i < NX; i++) {
       const f = (i + 0.5) / NX;
@@ -232,17 +271,50 @@ export class SedimentEngine {
       else if (f <= POOL_END) w = 1;
       else if (f < POOL_END + ramp) w = 1 - smootherstep((f - POOL_END) / ramp);
       else w = 0;
-      const h = depth * (1 + (poolFactor - 1) * w);
-      const U = q / h;
-      this.hArr[i] = h;
-      this.uMeanArr[i] = U;
-      this.uStarArr[i] = shearVelocity(U, h);
+      this.h0Arr[i] = depth * (1 + (poolFactor - 1) * w);
     }
+    for (let b = 0; b < N_BINS; b++) this.h0Bin[b] = this.h0Arr[this.cell(((b + 0.5) / N_BINS) * RIVER_LENGTH)];
+    this.hMin = MIN_WATER_FRACTION * depth;
+    this.updateHydraulics();
     let total = 0;
     this.mixCdf = this.params.mix.map((m) => (total += Math.max(0, m)));
     if (total > 0) this.mixCdf = this.mixCdf.map((v) => v / total);
     else this.mixCdf = this.mixCdf.map(() => 0);
     if (shouldReset) this.reset();
+  }
+
+  /**
+   * Recalcula h, U, u* por celda a partir de la geometría base y el espesor del depósito.
+   * El espesor por bin se interpola linealmente entre centros de bin para que τ(x) no tenga
+   * saltos escalonados cada 2 m (que crearían barras espurias en los bordes de bin).
+   */
+  private updateHydraulics() {
+    const q = this.params.velocity * this.params.depth; // caudal por unidad de ancho (continuidad)
+    for (let i = 0; i < NX; i++) {
+      const fb = ((i + 0.5) / NX) * N_BINS - 0.5;
+      const b0 = Math.floor(fb);
+      const t = fb - b0;
+      const lo = b0 < 0 ? 0 : b0;
+      const hi = b0 + 1 >= N_BINS ? N_BINS - 1 : b0 + 1;
+      const bed = this.bedBin[lo] * (1 - t) + this.bedBin[hi] * t;
+      const h = Math.max(this.h0Arr[i] - bed, this.hMin);
+      const U = q / h;
+      this.hArr[i] = h;
+      this.uMeanArr[i] = U;
+      this.uStarArr[i] = shearVelocity(U, h);
+    }
+    this.bedDirty = false;
+  }
+
+  /** ¿cabe una parcela más en el bin b sin dejar menos de hMin de agua encima? */
+  private hasRoom(b: number): boolean {
+    return this.bedBin[b] + BED_DZ_PER_PARTICLE <= this.h0Bin[b] - this.hMin;
+  }
+
+  private addToBed(c: number, b: number, sign: 1 | -1) {
+    this.depositBins[c * N_BINS + b] += sign;
+    this.bedBin[b] = Math.max(0, this.bedBin[b] + sign * BED_DZ_PER_PARTICLE);
+    this.bedDirty = true;
   }
 
   reset() {
@@ -251,6 +323,8 @@ export class SedimentEngine {
     this.exited.fill(0);
     this.deposited.fill(0);
     this.depositBins.fill(0);
+    this.bedBin.fill(0);
+    this.updateHydraulics();
     this.saturated = false;
     this.time = 0;
     this.injectAcc = 0;
@@ -268,8 +342,17 @@ export class SedimentEngine {
   uStarAt(xm: number): number {
     return this.uStarArr[this.cell(xm)];
   }
+  /** Profundidad efectiva del agua (m) en x: base menos el espesor del depósito. */
   hAt(xm: number): number {
     return this.hArr[this.cell(xm)];
+  }
+  /** Profundidad geométrica base (m) en x, sin depósito (fondo rocoso/sustrato del tramo). */
+  h0At(xm: number): number {
+    return this.h0Arr[this.cell(xm)];
+  }
+  /** Espesor del depósito (m) por bin. Vista directa, sin copia. */
+  getBedSnapshot(): Float64Array {
+    return this.bedBin;
   }
   private cell(xm: number): number {
     const i = Math.floor((xm / RIVER_LENGTH) * NX);
@@ -332,6 +415,7 @@ export class SedimentEngine {
   }
 
   step(dt: number) {
+    if (this.bedDirty) this.updateHydraulics();
     this.inject(dt);
     this.time += dt;
     this.historyAcc += dt;
@@ -350,6 +434,28 @@ export class SedimentEngine {
       const tau = RHO_W * us * us;
 
       if (st === DEPOSITED) {
+        const b = this.bin(this.x[i]);
+        // Avalancha: si la cara de la barra supera el ángulo de reposo respecto a un vecino,
+        // la parcela se desliza a ese vecino (cota del lecho = espesor − profundidad base).
+        const elev = this.bedBin[b] - this.h0Bin[b];
+        const maxDiff = BIN_WIDTH * REPOSE_TAN + BED_DZ_PER_PARTICLE;
+        let target = -1;
+        let drop = maxDiff;
+        for (let k = 0; k < 2; k++) {
+          const nb = k === 0 ? b + 1 : b - 1;
+          if (nb < this.firstDepositBin || nb >= N_BINS) continue;
+          const d = elev - (this.bedBin[nb] - this.h0Bin[nb]);
+          if (d > drop && this.hasRoom(nb)) {
+            drop = d;
+            target = nb;
+          }
+        }
+        if (target >= 0) {
+          this.addToBed(c, b, -1);
+          this.x[i] += (target - b) * BIN_WIDTH;
+          this.addToBed(c, target, 1);
+          continue;
+        }
         const ex = tau / this.tauCe[c];
         if (ex > 1) {
           const p = Math.min(1, E0 * (ex - 1)) * dt;
@@ -359,7 +465,7 @@ export class SedimentEngine {
             this.state[i] = SUSPENDED;
             this.s[i] = (zb + lift) / h;
             this.deposited[c]--;
-            this.depositBins[c * N_BINS + this.bin(this.x[i])]--;
+            this.addToBed(c, b, -1);
           }
         }
         continue;
@@ -389,11 +495,13 @@ export class SedimentEngine {
       if (z > h - zb) z = Math.max(zb, 2 * (h - zb) - z); // rebote en superficie
       if (z < zb) {
         // contacto con el lecho: ¿se deposita? (no en la zona de entrada, ver ENTRY_BUFFER)
-        const pd = xn >= ENTRY_BUFFER ? 1 - tau / this.tauCd[c] : 0;
+        // Sin espacio de acomodación (lecho ya al tope hMin) la parcela sigue como carga de fondo.
+        const bn = this.bin(xn);
+        const pd = xn >= ENTRY_BUFFER && this.hasRoom(bn) ? 1 - tau / this.tauCd[c] : 0;
         if (pd > 0 && this.rand() < pd) {
           this.state[i] = DEPOSITED;
           this.deposited[c]++;
-          this.depositBins[c * N_BINS + this.bin(xn)]++;
+          this.addToBed(c, bn, 1);
           continue;
         }
         const ex = tau / this.tauCe[c];

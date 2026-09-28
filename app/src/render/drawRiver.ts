@@ -1,4 +1,4 @@
-import { ENTRY_BUFFER, N_BINS, RIVER_LENGTH, SUSPENDED } from "../sim/engine";
+import { BED_DZ_PER_PARTICLE, ENTRY_BUFFER, MIN_WATER_FRACTION, N_BINS, RIVER_LENGTH, SUSPENDED } from "../sim/engine";
 import type { DrawRiver } from "../hooks/useSimulationLoop";
 
 /**
@@ -6,7 +6,7 @@ import type { DrawRiver } from "../hooks/useSimulationLoop";
  * No muta `engine`, no llama setState de React, no asume cadencia fija.
  *
  * Fidelidad visual:
- * - El perfil del lecho se lee de `engine.hAt(xm)`, que ya incorpora la transición
+ * - El perfil del lecho base se lee de `engine.h0At(xm)` (sin depósito), que ya incorpora la transición
  *   smootherstep del remanso (50-70 m con rampa de 8 m a cada lado) calculada en el motor:
  *   este archivo NO dibuja ninguna geometría propia del remanso, solo muestrea `hAt` en
  *   suficientes puntos para que la curva se vea suave (200+ muestras / 100 m).
@@ -153,7 +153,7 @@ export const drawRiver: DrawRiver = (ctx, engine, view) => {
   const bedY: number[] = new Array(steps + 1);
   for (let k = 0; k <= steps; k++) {
     const xm = (k / steps) * RIVER_LENGTH * 0.9999;
-    const h = engine.hAt(xm);
+    const h = engine.h0At(xm);
     xs[k] = (k / steps) * W;
     hVals[k] = h;
     bedY[k] = yBed(h);
@@ -269,58 +269,38 @@ export const drawRiver: DrawRiver = (ctx, engine, view) => {
   });
 
   // --- depósitos apilados por clase: contorno superior suavizado + patrón de textura granulada
-  // cacheado por clase (en vez del bloque sólido opaco / techo rectilíneo anterior).
+  // cacheado por clase.
   //
-  // Tope visual (clamp): el motor (sim/engine.ts) no impone un límite de capacidad por bin —
-  // solo un límite global de partículas (`engine.capacity`, banner "saturated"). Con parámetros
-  // extremos (p.ej. profundidad=3 m, remanso=3.8x) un bin puntual del remanso puede acumular más
-  // partículas de las que caben dibujadas en su propia columna de agua, y sin tope la pila
-  // "perfora" la superficie y el borde superior del canvas (reportado tras el cierre de la ronda
-  // anterior: se había arreglado el contorno/textura de D2 pero no el clamp de altura). Aquí NO
-  // se trunca arbitrariamente la última clase dibujada: si la demanda total de altura (suma de
-  // las 5 clases) excede la altura disponible de la columna local, se comprime PROPORCIONALMENTE
-  // toda la pila del bin (mismas proporciones entre clases, menor escala) y el bin se marca
-  // "colmatado" para dibujar encima una textura de aspas de advertencia, en vez de seguir
-  // creciendo sin límite. El dato real (`stats`) no se altera, solo su representación. ---
+  // Altura física: el motor lleva el espesor real del depósito por bin (`getBedSnapshot()`, en m,
+  // ecuación de Exner) y ese espesor ya reduce la profundidad del agua que ve la hidráulica. Aquí
+  // se dibuja con la misma escala vertical que el agua (pxPerM), repartido entre clases según la
+  // proporción de partículas de cada clase en el bin. El motor nunca deja menos de
+  // MIN_WATER_FRACTION·depth de agua sobre el depósito, así que la pila no puede perforar la
+  // superficie: el tope es físico, no un clamp visual. Los bins que llegaron a ese tope se marcan
+  // "colmatado" (sin espacio de acomodación: el sedimento sigue de largo por encima). ---
   const stats = engine.getBinsSnapshot();
-  const perBin = engine.capacity / N_BINS;
-  const pxPerDep = (plotH * 0.3) / (perBin * 0.5);
+  const bed = engine.getBedSnapshot();
   const binCenterX = (b: number) => ((b + 0.5) / N_BINS) * W;
   const bedYAtBin: number[] = new Array(N_BINS);
-  for (let b = 0; b < N_BINS; b++) bedYAtBin[b] = yBed(engine.hAt(((b + 0.5) / N_BINS) * RIVER_LENGTH));
-
-  // Margen de agua que debe quedar siempre visible por encima de la pila: al menos 12% de la
-  // columna local de agua o 6 px, lo que sea mayor (para que un bin de columna muy corta no
-  // pierda el margen por completo).
-  const maxDepositPx: number[] = new Array(N_BINS);
+  const h0AtBin: number[] = new Array(N_BINS);
   for (let b = 0; b < N_BINS; b++) {
-    const colPx = Math.max(0, bedYAtBin[b] - top);
-    const waterGapPx = Math.max(6, colPx * 0.12);
-    maxDepositPx[b] = Math.max(2, colPx - waterGapPx);
+    h0AtBin[b] = engine.h0At(((b + 0.5) / N_BINS) * RIVER_LENGTH);
+    bedYAtBin[b] = yBed(h0AtBin[b]);
   }
+  const hMin = MIN_WATER_FRACTION * p.depth;
 
-  // Demanda de altura sin comprimir por clase/bin, y su suma por bin.
   const rawH: number[][] = new Array(nC);
-  const totalDemandPx: number[] = new Array(N_BINS).fill(0);
-  for (let c = 0; c < nC; c++) {
-    rawH[c] = new Array(N_BINS);
-    for (let b = 0; b < N_BINS; b++) {
-      const n = stats[c * N_BINS + b];
-      const hh = n > 0 ? Math.max(1, n * pxPerDep) : 0;
-      rawH[c][b] = hh;
-      totalDemandPx[b] += hh;
-    }
-  }
+  for (let c = 0; c < nC; c++) rawH[c] = new Array(N_BINS).fill(0);
   const saturated: boolean[] = new Array(N_BINS);
-  const scale: number[] = new Array(N_BINS);
   for (let b = 0; b < N_BINS; b++) {
-    if (totalDemandPx[b] > maxDepositPx[b] + 0.5 && totalDemandPx[b] > 0) {
-      scale[b] = maxDepositPx[b] / totalDemandPx[b];
-      saturated[b] = true;
-    } else {
-      scale[b] = 1;
-      saturated[b] = false;
+    let n = 0;
+    for (let c = 0; c < nC; c++) n += stats[c * N_BINS + b];
+    const px = bed[b] * pxPerM;
+    for (let c = 0; c < nC; c++) {
+      const k = stats[c * N_BINS + b];
+      rawH[c][b] = n > 0 && k > 0 ? Math.max(1, (px * k) / n) : 0;
     }
+    saturated[b] = n > 0 && bed[b] + BED_DZ_PER_PARTICLE > h0AtBin[b] - hMin;
   }
 
   const bottomBoundary: number[][] = [];
@@ -330,7 +310,7 @@ export const drawRiver: DrawRiver = (ctx, engine, view) => {
     const bottomB = cum.slice();
     const topB: number[] = new Array(N_BINS);
     for (let b = 0; b < N_BINS; b++) {
-      const hh = rawH[c][b] * scale[b];
+      const hh = rawH[c][b];
       topB[b] = cum[b] - hh;
       cum[b] = topB[b];
     }
@@ -359,10 +339,9 @@ export const drawRiver: DrawRiver = (ctx, engine, view) => {
     ctx.stroke();
   }
 
-  // --- indicador de "banco colmatado": estos bins llegaron al tope visual (el conteo real de
-  // partículas depositadas sigue creciendo por debajo, comprimido, pero ya no cabe dibujado sin
-  // tapar el agua). Se marca con una textura de aspas de advertencia — no con más altura — para
-  // que se lea como "lleno", no como un error de dibujo. ---
+  // --- indicador de "banco colmatado": estos bins llegaron a la lámina de agua mínima y ya no
+  // aceptan más depósito (el sedimento que llega pasa por encima). Se marca con una textura de
+  // aspas de advertencia para que se lea como "lleno", no como un error de dibujo. ---
   const binW = W / N_BINS;
   const drawSaturatedRun = (i0: number, i1: number) => {
     const minX = binCenterX(i0) - binW / 2;

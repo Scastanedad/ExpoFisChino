@@ -1,14 +1,14 @@
 ---
 tipo: proyecto
 estado: activo
-última-actualización: 2026-09-20
+última-actualización: 2026-09-28
 tags: [expofischino, efc]
 ---
 
 # ExpoFisChino
 
 **Estado:** 🟢 Activo
-**Última actualización:** 2026-09-20
+**Última actualización:** 2026-09-28
 
 ## Resumen
 Simulación web, para público universitario, que representa cómo un río transporta sedimentos. El usuario modifica la velocidad del agua y observa cuántas partículas se transportan hasta el final del río y cuántas se depositan antes al perder capacidad de transporte.
@@ -28,6 +28,7 @@ Simulación web, para público universitario, que representa cómo un río trans
 - [~] Desplegar en Vercel (Fase 4, parcial — V2/V3 hechos: proyecto vinculado, deploy con prueba de humo exitosa; V4 producción NO ejecutado, requiere autorización explícita del usuario; además queda una decisión pendiente sobre la etiqueta "production" que puso Vercel automáticamente)
 
 ## Estado Actual
+- **Lecho evolutivo (2026-09-28):** el depósito ahora realimenta la hidráulica (Exner + ángulo de reposo); se acabó la acumulación "infinita" de grava en un punto. 48/48 tests. Rama `claude/zen-dirac-sbgw2v`. Ver [[decisiones]].
 - **Fix post-cierre (2026-09-20):** el usuario reportó acumulación "infinita" de grava en remanso profundo (`velocity=2, depth=3, poolFactor=3.8`); diagnosticado como física real (no bug, limitación conocida sin realimentación lecho→hidráulica) y acotado visualmente con un clamp proporcional en `drawRiver.ts`. Detalle en [[decisiones]].
 - **Fase:** Revamp visual + comportamiento **completo y verificado** (2026-09-20). El usuario había probado la app de la ronda de cierre anterior (Fases 1-3 completas, re-auditoría U2 "sin hallazgos Críticos/Altos") y no quedó conforme "ni en física ni en visual". Se ejecutó el prompt de rediseño ([[../03-Activos/prompt-revamp-2026-09-20]]) con los 6 subagentes: diagnóstico crítico con criterio de diseño/comportamiento (no el checklist de accesibilidad, ya superado), dirección visual "instrumento de campo" aprobada por el usuario, implementación por los 3 subagentes de código, y re-auditoría con el mismo criterio nuevo. Por qué esto no contradice el veredicto U2 anterior: son varas distintas (accesibilidad/usabilidad vs. diseño/estética + plausibilidad física en movimiento) — detalle completo en [[decisiones]].
 - **Qué se corrigió:** bug crítico de comportamiento — cada tick de arrastre de un slider (no solo al soltar) disparaba un `reset()` completo del motor, root cause de "no convence viéndola correr" — separado en "live update" (sin reset) vs. "commit" al soltar (`react-expert`). Identidad visual completa nueva, chrome oscuro tipo estación de aforo hidráulico, paleta de grano coherente con el diámetro físico, río con textura/movimiento real, depósito de grava ya no parece un bug de render, jerarquía visual y orden móvil corregidos (`frontend-expert`). Escala de color de grano y nuevos `DEFAULT_PARAMS`/`capacity` con justificación física, evaluación (y descarte documentado, por costo) de un fix numérico de grava sub-resuelta (`backend-expert`). Re-auditoría (`uiux-reviewer`): 9/10 hallazgos de diseño (D1-D10) resueltos con evidencia, 2 hallazgos menores nuevos (N1/N2) resueltos en una ronda corta. Detalle completo por subagente en [[decisiones]] y tabla D1-D10/N1-N2 en [[informe-uiux-2026-09-19]].

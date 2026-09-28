@@ -11,7 +11,17 @@ import {
   tauCritErosion,
   transportMode,
 } from "./physics";
-import { ENTRY_BUFFER, N_BINS, POOL_START, RIVER_LENGTH, SedimentEngine, SUSPENDED, type SimParams } from "./engine";
+import {
+  BED_DZ_PER_PARTICLE,
+  ENTRY_BUFFER,
+  MIN_WATER_FRACTION,
+  N_BINS,
+  REPOSE_TAN,
+  RIVER_LENGTH,
+  SedimentEngine,
+  SUSPENDED,
+  type SimParams,
+} from "./engine";
 
 describe("physics (Soulsby 1997)", () => {
   it("velocidad de caída de arena de 0.25 mm ≈ 36 mm/s", () => {
@@ -258,67 +268,107 @@ describe("zona de entrada / resetOnChange (B4)", () => {
   });
 });
 
-describe("caso límite: remanso profundo sin resuspensión posible (reporte de usuario, sept. 2026)", () => {
-  // velocity=2, depth=3, poolFactor=3.8: fuera del rango instrumentado hasta ahora
-  // (depth se había probado hasta 1, poolFactor hasta 3). A estos parámetros h en el
-  // remanso sube a depth*poolFactor=11.4 m, y por continuidad U y u* caen tanto que
-  // tau_remanso/tauCe_grava ≈ 0.21: la grava queda atrapada de forma permanente (nunca
-  // tau_remanso supera tauCe_grava, así que ex=tau/tauCe nunca pasa de 1 y la probabilidad
-  // de resuspensión, que sólo es >0 cuando ex>1, es exactamente 0 todo el tiempo).
-  // Esto es la limitación conocida "sin lecho evolutivo" (ver modelo-rio-efc §5, punto 3)
-  // llevada a un extremo visualmente dramático: sin realimentación lecho→hidráulica, el
-  // depósito de grava en la cabecera del remanso crece de forma monótona y sin límite
-  // natural (sólo lo acota la capacity global del motor). No es un bug de contabilidad:
-  // el invariante de masa se mantiene, y el depósito se concentra correctamente en la
-  // franja donde tau cruza tauCe (borde de entrada al remanso), no en un bin arbitrario.
-  // Este test es un test de regresión de comportamiento documentado, no una corrección:
-  // si algún día se agrega realimentación lecho→hidráulica, hay que revisar y actualizar
-  // este test (y la skill modelo-rio-efc) a propósito, no dejar que falle en silencio.
-  it("tau en el remanso queda muy por debajo de tauCe de la grava (sin vía de resuspensión)", () => {
-    const e = new SedimentEngine({ capacity: 500, seed: 1 });
-    const params: SimParams = { ...e.params, velocity: 2, depth: 3, poolFactor: 3.8 };
-    e.setParams(params);
-    const gravel = GRAIN_CLASSES[GRAIN_CLASSES.length - 1];
-    const tauPool = e.tauAt(RIVER_LENGTH * (POOL_START + 0.1)); // dentro del tramo plano del remanso
-    expect(tauPool).toBeLessThan(0.3 * tauCritErosion(gravel));
-  });
+describe("realimentación lecho → flujo (Exner): sin acumulación infinita en un punto", () => {
+  // Reporte de usuario (sept. 2026): con velocity=2, depth=3, poolFactor=3.8 la grava se
+  // acumulaba "de forma infinita y no natural" en 1-2 bins en la cabecera del remanso, y a
+  // velocidad baja en un único bin justo después de la zona de entrada (x=10 m). Causa: el
+  // depósito no modificaba la hidráulica. Con la realimentación de Exner, el depósito eleva el
+  // lecho, reduce la profundidad efectiva, por continuidad sube U y τ, y la barra deja de crecer
+  // cuando τ ≈ τce; a partir de ahí su frente avanza aguas abajo (progradación).
+  const gravelIdx = GRAIN_CLASSES.length - 1;
+  const gravel = GRAIN_CLASSES[gravelIdx];
 
-  it("la grava se acumula de forma monótona y sin resuspensión, y el invariante de masa se mantiene", () => {
-    const gravelIdx = GRAIN_CLASSES.length - 1;
+  function runBed(velocity: number, depth: number, poolFactor: number, seconds: number, mix?: number[]) {
     const e = new SedimentEngine({ capacity: 8000, seed: 7 });
-    const params: SimParams = { ...e.params, velocity: 2, depth: 3, poolFactor: 3.8, feedRate: 20 };
-    e.setParams(params);
+    e.setParams({ ...e.params, velocity, depth, poolFactor, feedRate: 20, mix: mix ?? e.params.mix });
+    e.advance(seconds, 0.05);
+    return e;
+  }
 
-    e.advance(300, 0.05);
-    const dep300 = e.getStats().deposited[gravelIdx];
-    e.advance(600, 0.05); // otros 600 s simulados (900 s totales), bien lejos de saturar capacity=8000
-    const stats900 = e.getStats();
-    const dep900 = stats900.deposited[gravelIdx];
-
-    // invariante de masa, por clase y en total, tras la ventana larga
+  it("remanso profundo: la barra de grava llega a su altura de equilibrio (τ≈τce) y luego prograda", () => {
+    const e = runBed(2, 3, 3.8, 1600);
+    const st = e.getStats();
     for (let c = 0; c < GRAIN_CLASSES.length; c++) {
-      expect(stats900.injected[c]).toBe(stats900.exited[c] + stats900.deposited[c] + stats900.suspended[c]);
+      expect(st.injected[c]).toBe(st.exited[c] + st.deposited[c] + st.suspended[c]);
     }
-    expect(stats900.saturated).toBe(false);
-
-    // crecimiento monótono y sustancial: no hay resuspensión posible a estos parámetros
-    // (ver test anterior), así que el depósito de grava solo puede subir con el tiempo.
-    expect(dep900).toBeGreaterThan(dep300);
-    expect(dep900).toBeGreaterThan(dep300 * 1.5);
-
-    // el depósito de grava está concentrado cerca de la entrada al remanso (donde tau cruza
-    // tauCe), no disperso al azar por todo el tramo: confirma que no hay un bug de índice de
-    // bin. Bin del borde de entrada al remanso ≈ floor(POOL_START*N_BINS) - unos pocos bins.
     const bins = e.getBinsSnapshot();
-    const poolEdgeBin = Math.floor(POOL_START * N_BINS);
-    let nearEdge = 0;
-    let totalGravelBins = 0;
+    const bed = e.getBedSnapshot();
+    let maxBin = 0;
+    let occupied = 0;
     for (let b = 0; b < N_BINS; b++) {
-      const v = bins[gravelIdx * N_BINS + b];
-      totalGravelBins += v;
-      if (b >= poolEdgeBin - 4 && b <= poolEdgeBin) nearEdge += v;
+      if (bins[gravelIdx * N_BINS + b] > bins[gravelIdx * N_BINS + maxBin]) maxBin = b;
+      if (bins[gravelIdx * N_BINS + b] > 0) occupied++;
     }
-    expect(totalGravelBins).toBe(dep900);
-    expect(nearEdge / totalGravelBins).toBeGreaterThan(0.9);
-  });
+    // ya no está todo en uno o dos bins
+    expect(bins[gravelIdx * N_BINS + maxBin] / st.deposited[gravelIdx]).toBeLessThan(0.5);
+    expect(occupied).toBeGreaterThanOrEqual(3);
+    // sobre la cresta de la barra el esfuerzo ya subió mucho respecto al remanso sin depósito
+    // (τ/τce ≈ 0.21) camino al umbral de la grava, sin pasarlo
+    const xCrest = ((maxBin + 0.5) / N_BINS) * RIVER_LENGTH;
+    const ratio = e.tauAt(xCrest) / tauCritErosion(gravel);
+    expect(ratio).toBeGreaterThan(0.5);
+    expect(ratio).toBeLessThan(1.3);
+    // y la barra no pasa de su altura de equilibrio analítica (h_eq ≈ 5.7 m con q = 6 m²/s)
+    expect(bed[maxBin]).toBeLessThan(3 * 3.8 - 5.3);
+  }, 60000);
+
+  it("equilibrio: aguas arriba del remanso el lecho de grava se ajusta hasta τ ≈ τce", () => {
+    // velocity=0.7, depth=1: τ inicial ≈ 0.73·τce de la grava, así que la grava se deposita
+    // aguas arriba; el lecho sube hasta que la sección reducida lleva τ al umbral.
+    const e = runBed(0.7, 1, 2.75, 800);
+    for (const x of [15, 25, 35]) {
+      const r = e.tauAt(x) / tauCritErosion(gravel);
+      expect(r).toBeGreaterThan(0.9);
+      expect(r).toBeLessThan(1.15);
+    }
+  }, 60000);
+
+  it("velocidad baja: la grava no se apila en un único bin justo después de la zona de entrada", () => {
+    const mix = GRAIN_CLASSES.map((_, i) => (i === gravelIdx ? 100 : 0));
+    const e = runBed(0.3, 0.5, 1, 900, mix);
+    const bins = e.getBinsSnapshot();
+    const dep = e.getStats().deposited[gravelIdx];
+    const firstBin = Math.ceil((ENTRY_BUFFER / RIVER_LENGTH) * N_BINS);
+    expect(dep).toBeGreaterThan(0);
+    expect(bins[gravelIdx * N_BINS + firstBin] / dep).toBeLessThan(0.5);
+  }, 60000);
+
+  it("el lecho respeta el ángulo de reposo, la lámina mínima de agua y es coherente con los conteos", () => {
+    const e = runBed(0.4, 3, 4, 800);
+    const bins = e.getBinsSnapshot();
+    const bed = e.getBedSnapshot();
+    const hMin = MIN_WATER_FRACTION * 3;
+    const firstBin = Math.ceil((ENTRY_BUFFER / RIVER_LENGTH) * N_BINS);
+    const h0 = (b: number) => e.h0At(((b + 0.5) / N_BINS) * RIVER_LENGTH);
+    for (let b = 0; b < N_BINS; b++) {
+      let n = 0;
+      for (let c = 0; c < GRAIN_CLASSES.length; c++) n += bins[c * N_BINS + b];
+      expect(bed[b]).toBeCloseTo(n * BED_DZ_PER_PARTICLE, 6);
+      expect(h0(b) - bed[b]).toBeGreaterThanOrEqual(hMin - 1e-9);
+    }
+    for (let i = 0; i < 400; i++) expect(e.hArr[i]).toBeGreaterThanOrEqual(hMin - 1e-6);
+    // ninguna cara de depósito más empinada que el reposo (salvo que el vecino bajo esté lleno)
+    const binW = RIVER_LENGTH / N_BINS;
+    const tol = binW * REPOSE_TAN + 2 * BED_DZ_PER_PARTICLE;
+    for (let b = firstBin; b < N_BINS - 1; b++) {
+      for (const [hi, lo] of [
+        [b, b + 1],
+        [b + 1, b],
+      ]) {
+        if (bed[hi] <= 0 || lo < firstBin) continue;
+        const loFull = bed[lo] + BED_DZ_PER_PARTICLE > h0(lo) - hMin;
+        const drop = bed[hi] - h0(hi) - (bed[lo] - h0(lo));
+        if (!loFull) expect(drop).toBeLessThanOrEqual(tol);
+      }
+    }
+  }, 60000);
+
+  it("reset() borra el lecho y restaura la hidráulica original", () => {
+    const e = runBed(0.7, 1, 2.75, 300);
+    const hPoolBefore = e.hAt(60);
+    e.reset();
+    expect(Array.from(e.getBedSnapshot()).every((v) => v === 0)).toBe(true);
+    expect(e.hAt(60)).toBeCloseTo(e.h0At(60), 6);
+    expect(e.hAt(60)).toBeGreaterThanOrEqual(hPoolBefore);
+  }, 60000);
 });
