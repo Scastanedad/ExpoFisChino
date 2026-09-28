@@ -1,0 +1,11 @@
+node_modules
+dist
+.vercel
+*.log
+.env
+.env.*
+!.env.example
+.agents/skills
+
+.vercel
+.env*

@@ -1,0 +1,221 @@
+{
+  "main": {
+    "id": "386aae2d03db0254",
+    "type": "split",
+    "children": [
+      {
+        "id": "b26a85880c4027f8",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "477fc26d33694b51",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "03-Activos/prompt-revamp-2026-09-20.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "prompt-revamp-2026-09-20"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "19e397c92163da88",
+    "type": "split",
+    "children": [
+      {
+        "id": "083f24eaa6a529cb",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "37ff155068324775",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Explorador de archivos"
+            }
+          },
+          {
+            "id": "e2fb256069f28d8a",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Buscar"
+            }
+          },
+          {
+            "id": "b25d37e4bcf5773e",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Marcadores"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 200
+  },
+  "right": {
+    "id": "97465ddc16d3c827",
+    "type": "split",
+    "children": [
+      {
+        "id": "63a034d30612ded8",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "bcc8665dc2315b04",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Enlaces entrantes"
+            }
+          },
+          {
+            "id": "2de0592857909303",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Enlaces salientes"
+            }
+          },
+          {
+            "id": "15b7d0fc91c13341",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiquetas"
+            }
+          },
+          {
+            "id": "79fb7915d3e21557",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Todas las propiedades"
+            }
+          },
+          {
+            "id": "26217a82a33247c1",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Esquema"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Abrir selector rápido": false,
+      "graph:Abrir vista gráfica": false,
+      "canvas:Crear nuevo lienzo": false,
+      "daily-notes:Abrir la nota de hoy": false,
+      "templates:Insertar plantilla": false,
+      "command-palette:Abrir paleta de comandos": false,
+      "bases:Crear nueva base": false
+    }
+  },
+  "active": "477fc26d33694b51",
+  "lastOpenFiles": [
+    "04-Sync/historial.md.tmp.21636.5cb5174e4ef6",
+    "04-Sync/sesion-actual.md.tmp.21636.e0594b4646b6",
+    "00-Proyecto/README.md.tmp.21636.82febd3d87d7",
+    "00-Proyecto/decisiones.md.tmp.21636.836d869345e3",
+    "00-Proyecto/decisiones.md.tmp.21636.5b9dc57ee593",
+    "00-Proyecto/decisiones.md.tmp.21636.f55aadbc2b3b",
+    "Bienvenido.md.tmp.21636.041e0690c2e0",
+    "00-Proyecto/roadmap.md.tmp.21636.fa8606ca526d",
+    "00-Proyecto/roadmap.md.tmp.21636.cd0f63945fb7",
+    "00-Proyecto/informe-uiux-2026-09-19.md.tmp.21636.9e7cc6eb842d",
+    "00-Proyecto/informe-uiux-2026-09-19.md.tmp.21636.88b52b60c17f",
+    "03-Activos/prompt-revamp-2026-09-20.md",
+    "00-Proyecto/arquitectura.md",
+    "00-Proyecto/informe-uiux-2026-09-19.md",
+    "00-Proyecto/decisiones.md",
+    "00-Proyecto/roadmap.md",
+    "03-Activos/prompt-inicial-claude-code.md",
+    "01-Referencias/comandos.md",
+    "03-Activos/prompts.md",
+    "04-Sync/sesion-actual.md",
+    "Bienvenido.md",
+    "00-Proyecto/README.md",
+    "02-Contexto/bio.md",
+    "04-Sync/historial.md",
+    "03-Activos/snippets.md",
+    "03-Activos/checklist.md",
+    "02-Contexto/preferencias.md",
+    "01-Referencias/urls.md",
+    "01-Referencias/tech-stack.md",
+    "01-Referencias/glosario.md"
+  ]
+}
